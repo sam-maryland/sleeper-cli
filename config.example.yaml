@@ -1,0 +1,9 @@
+# ~/.sleeper/config.yaml
+#
+# Map each season year to its Sleeper league ID.
+# Find your league ID in the Sleeper app URL: sleeper.com/leagues/<league_id>
+
+leagues:
+  "2024": "your_league_id_here"
+  "2023": "your_league_id_here"
+  "2022": "your_league_id_here"
