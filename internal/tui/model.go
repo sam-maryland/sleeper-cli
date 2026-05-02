@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sam-maryland/sleeper-cli/internal/cache"
 	"github.com/sam-maryland/sleeper-cli/internal/config"
 	"github.com/sam-maryland/sleeper-cli/pkg/sleeper"
 )
@@ -19,6 +20,7 @@ const (
 	stateSelectYear appState = iota
 	stateLoading
 	stateStandings
+	stateDraftOrder
 	stateError
 )
 
@@ -96,8 +98,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "esc":
+			if m.state == stateDraftOrder {
+				m.state = stateStandings
+				return m, nil
+			}
 			if m.state == stateStandings || m.state == stateError {
 				m.state = stateSelectYear
+				return m, nil
+			}
+		case "d":
+			if m.state == stateStandings {
+				m.state = stateDraftOrder
+				return m, nil
+			}
+			if m.state == stateDraftOrder {
+				m.state = stateStandings
 				return m, nil
 			}
 		case "enter":
@@ -150,6 +165,8 @@ func (m Model) View() string {
 		return fmt.Sprintf("\n\n  %s  Fetching standings…\n", m.spinner.View())
 	case stateStandings:
 		return m.standingsView()
+	case stateDraftOrder:
+		return m.draftOrderView()
 	case stateError:
 		return fmt.Sprintf("\n\n  %s\n\n  %s\n",
 			errorStyle.Render("Error: "+m.err.Error()),
@@ -209,7 +226,57 @@ func (m Model) standingsView() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(hintStyle.Render("esc to go back • q to quit"))
+	sb.WriteString(hintStyle.Render("d for draft order • esc to go back • q to quit"))
+	sb.WriteString("\n")
+
+	return sb.String()
+}
+
+func (m Model) draftOrderView() string {
+	var sb strings.Builder
+
+	isComplete := m.league.Status == "complete"
+
+	nextYear := m.league.Season
+	var y int
+	if _, err := fmt.Sscanf(m.league.Season, "%d", &y); err == nil {
+		nextYear = fmt.Sprintf("%d", y+1)
+	}
+
+	title := fmt.Sprintf("Draft Order — %s", nextYear)
+	if !isComplete {
+		title = fmt.Sprintf("Projected Draft Order — %s", nextYear)
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(titleStyle.Render(title))
+	sb.WriteString("\n\n")
+
+	header := fmt.Sprintf("%-6s  %-22s  %3s  %3s  %3s  %7s  %7s",
+		"Pick", "Team", "W", "L", "T", "PF", "PA")
+	sb.WriteString(headerStyle.Render(header))
+	sb.WriteString("\n")
+	sb.WriteString(dividerStyle.Render(strings.Repeat("─", 61)))
+	sb.WriteString("\n")
+
+	n := len(m.standings)
+	for i := n - 1; i >= 0; i-- {
+		s := m.standings[i]
+		pick := fmt.Sprintf("%d", n-i)
+
+		name := s.TeamName
+		if len([]rune(name)) > 22 {
+			name = string([]rune(name)[:20]) + ".."
+		}
+
+		row := fmt.Sprintf("%-6s  %-22s  %3d  %3d  %3d  %7.1f  %7.1f",
+			pick, name, s.Wins, s.Losses, s.Ties, s.PointsFor, s.PointsAgainst)
+		sb.WriteString("  " + regularRowStyle.Render(row))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(hintStyle.Render("d for standings • esc to go back • q to quit"))
 	sb.WriteString("\n")
 
 	return sb.String()
@@ -217,11 +284,20 @@ func (m Model) standingsView() string {
 
 func fetchStandings(leagueID string) tea.Cmd {
 	return func() tea.Msg {
+		if cached, ok, err := cache.Load(leagueID); err == nil && ok {
+			return standingsFetchedMsg{standings: cached.Standings, league: cached.League}
+		}
+
 		client := sleeper.NewSleeperClient(&http.Client{})
 		standings, league, err := sleeper.CalculateStandings(context.Background(), client, leagueID)
 		if err != nil {
 			return errMsg{err}
 		}
+
+		if league.Status == "complete" {
+			_ = cache.Save(leagueID, cache.CachedStandings{Standings: standings, League: league})
+		}
+
 		return standingsFetchedMsg{standings: standings, league: league}
 	}
 }
